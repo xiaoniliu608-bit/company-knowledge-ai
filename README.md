@@ -1,1 +1,1 @@
-# company-knowledge-ai
+# 企业AI知识库项目
