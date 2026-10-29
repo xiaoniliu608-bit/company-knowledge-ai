@@ -11,6 +11,8 @@ import PyPDF2
 from docx import Document
 import json
 from datetime import datetime
+# 新增ollama导入
+from langchain_ollama import OllamaLLM
 
 load_dotenv()
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY")
@@ -37,16 +39,13 @@ UPLOAD_DIR = "uploads"
 DB_DIR = "faiss_index"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(DB_DIR, exist_ok=True)
-
 # ===================== 【这里是我们新增的元数据部分】=====================
 META_FILE = os.path.join(DB_DIR, "metadata.json")
 file_meta = []
-
 def save_meta():
     """把元数据列表写入json文件"""
     with open(META_FILE, "w", encoding="utf-8") as f:
         json.dump(file_meta, f, ensure_ascii=False, indent=2)
-
 # 加载已有元数据
 if os.path.exists(META_FILE):
     with open(META_FILE, "r", encoding="utf-8") as f:
@@ -54,7 +53,6 @@ if os.path.exists(META_FILE):
 else:
     save_meta()
 # ========================================================================
-
 # ========== 【新增：解析函数】 ==========
 def parse_pdf(file_path: str) -> str:
     text = ""
@@ -74,7 +72,6 @@ def parse_docx(file_path: str) -> str:
 def parse_txt(file_path: str) -> str:
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
-
 # ========== 初始化向量库 ==========
 def init_rag():
     global vector_db
@@ -95,7 +92,6 @@ def init_rag():
         vector_db = None
 # 启动时执行初始化
 init_rag()
-
 # ========== 健康检查接口 ==========
 @app.get("/health")
 async def health():
@@ -104,7 +100,6 @@ async def health():
         "rag_ready": rag_ready,
         "vector_db_loaded": vector_db is not None
     }
-
 # ========== 【修改后的上传接口：加入元数据记录】 ==========
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
@@ -131,10 +126,8 @@ async def upload_file(file: UploadFile = File(...)):
         chunks = text_splitter.split_text(full_text)
         chunk_cnt = len(chunks)
         print(f"📄 切分出 {chunk_cnt} 个文本块")
-
         # 记录：新增这批切片之前，向量库已有多少条
         old_size = vector_db.index.ntotal if vector_db else 0
-
         # 构建/追加向量库
         if vector_db is None:
             vector_db = FAISS.from_texts(chunks, embeddings)
@@ -143,7 +136,6 @@ async def upload_file(file: UploadFile = File(...)):
         # 保存到磁盘
         vector_db.save_local(DB_DIR)
         rag_ready = True
-
         # =====【新增：写入这条文件的元信息】=====
         new_record = {
             "filename": file.filename,
@@ -155,7 +147,6 @@ async def upload_file(file: UploadFile = File(...)):
         file_meta.append(new_record)
         save_meta()
         # ========================================
-
         return {
             "msg": "✅ 上传成功，知识库已更新",
             "filename": file.filename,
@@ -163,7 +154,6 @@ async def upload_file(file: UploadFile = File(...)):
         }
     except Exception as e:
         return {"error": f"上传失败: {str(e)}"}
-
 @app.get("/list")
 async def get_file_list():
     global file_meta
@@ -171,16 +161,13 @@ async def get_file_list():
         "code": 200,
         "data": file_meta
     }
-
 from pydantic import BaseModel
 class DeleteItem(BaseModel):
     filename: str
-
 @app.post("/delete")
 async def delete_file(item: DeleteItem):
     global vector_db, file_meta
     target_name = item.filename
-
     # 找到这条记录
     find_record = None
     remain_list = []
@@ -191,10 +178,8 @@ async def delete_file(item: DeleteItem):
             remain_list.append(one)
     if find_record is None:
         return {"code":400, "msg":"找不到这个文件"}
-
     start = find_record["start_id"]
     end = find_record["end_id"]
-
     # 取出需要保留的doc（LangChain的方式，doc和index顺序一一对应）
     all_docs = vector_db.docstore._dict
     keep_docs = []
@@ -202,21 +187,17 @@ async def delete_file(item: DeleteItem):
     for i, doc_id in enumerate(ids_list):
         if not (start <= i <= end):
             keep_docs.append(all_docs[doc_id])
-
     # 用剩下的文档新建向量库
     if len(keep_docs) == 0:
         vector_db = FAISS.from_texts([""], embeddings)
     else:
         vector_db = FAISS.from_documents(keep_docs, embeddings)
-
     # 更新元数据、保存文件
     file_meta = remain_list
     with open(os.path.join("faiss_index","metadata.json"),"w",encoding="utf-8") as f:
         json.dump(file_meta, f, ensure_ascii=False, indent=2)
     vector_db.save_local("faiss_index")
-
     return {"code":200, "msg":f"成功删除：{target_name}"}
-
 @app.post("/clear")
 async def clear_all():
     global vector_db, file_meta
@@ -227,7 +208,6 @@ async def clear_all():
         json.dump(file_meta, f, ensure_ascii=False, indent=2)
     vector_db.save_local("faiss_index")
     return {"code":200, "msg":"全部知识库已经清空"}
-
 # ========== 问答接口 ==========
 class ChatRequest(BaseModel):
     query: str
@@ -252,16 +232,11 @@ async def chat(req: ChatRequest):
 {context}
 用户问题：{query}
 """.format(context=context, query=req.query)
-        # 调用阿里云通义千问 qwen-turbo
-        resp = dashscope.Generation.call(
-            model="qwen-turbo",
-            messages=[{"role":"user", "content": prompt}]
-        )
-        print(f"dashscope完整返回：{resp}")
-        if resp.code == 200:
-            answer = resp.output.text
-        else:
-            answer = f"接口调用失败，code={resp.code}, msg={resp.message}"
+        # ========= Ollama本地模型，替换掉原来dashscope =========
+        llm = OllamaLLM(model="qwen2.5:1.5b", base_url="http://localhost:11434")
+        answer = llm.invoke(prompt)
+        print(f"ollama返回：{answer}")
+        # =======================================================
         return {
             "query": req.query,
             "answer": answer,
@@ -270,15 +245,12 @@ async def chat(req: ChatRequest):
     except Exception as e:
         print(f"LLM调用异常：{str(e)}")
         return {"error": f"问答失败: {str(e)}"}
-
 # ========== 评估接口（先放着，后面再调） ==========
 class EvaluateRequest(BaseModel):
     samples: list
 @app.post("/evaluate")
 async def evaluate(req: EvaluateRequest):
     return {"msg": "评估接口已就绪，样本数: " + str(len(req.samples))}
-
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
