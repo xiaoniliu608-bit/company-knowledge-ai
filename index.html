@@ -6,103 +6,182 @@
     <title>企业知识库AI助手</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body {
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            min-height: 100vh;
-        }
-        .chat-bubble-user {
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-        }
-        .chat-bubble-ai {
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-        }
-        .glow {
-            box-shadow: 0 0 40px rgba(59, 130, 246, 0.3);
-        }
+        body { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); min-height: 100vh; }
+        .chat-bubble-user { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); }
+        .chat-bubble-ai { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); }
+        .glow { box-shadow: 0 0 40px rgba(59,130,246,0.3); }
+        .session-item.active { background: rgba(59,130,246,0.25); }
     </style>
 </head>
 <body class="text-white">
-    <div class="container mx-auto max-w-4xl p-4 h-screen flex flex-col">
-        <!-- 顶部标题栏 -->
-        <div class="flex justify-between items-center mb-6">
-            <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
-                🏢 企业知识库AI助手
-            </h1>
-            <label class="cursor-pointer bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-all glow">
+    <div class="flex h-screen p-4 gap-4">
+        <!-- 侧边栏：会话列表 -->
+        <aside class="w-64 flex flex-col bg-white/5 rounded-xl backdrop-blur-sm p-3">
+            <button id="newChatBtn" class="mb-3 bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-all glow">🆕 新建会话</button>
+            <div id="sessionList" class="flex-1 overflow-y-auto space-y-2"></div>
+            <label class="cursor-pointer bg-slate-600 hover:bg-slate-700 px-4 py-2 rounded-lg transition-all text-center">
                 📤 上传文档
-                <input type="file" id="fileUpload" accept=".txt,.pdf" class="hidden">
+                <input type="file" id="fileUpload" accept=".txt,.pdf,.docx" class="hidden">
             </label>
-        </div>
+        </aside>
 
-        <!-- 聊天区域 -->
-        <div id="chatArea" class="flex-1 overflow-y-auto space-y-4 mb-4 p-4 rounded-xl bg-white/5 backdrop-blur-sm">
-            <div class="chat-bubble-ai p-4 rounded-lg max-w-3xl">
-                你好！我是企业知识库AI助手，你可以上传公司文档，然后直接向我提问哦~
+        <!-- 主聊天区 -->
+        <main class="flex-1 flex flex-col">
+            <div class="flex justify-between items-center mb-4">
+                <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                    🏢 企业知识库AI助手
+                </h1>
+                <button id="clearHistoryBtn" class="bg-rose-600 hover:bg-rose-700 px-4 py-2 rounded-lg transition-all">🗑️ 清空当前对话</button>
             </div>
-        </div>
 
-        <!-- 输入框 -->
-        <div class="flex gap-2">
-            <input 
-                type="text" 
-                id="questionInput" 
-                placeholder="输入你的问题..." 
-                class="flex-1 bg-white/10 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-            <button id="sendBtn" class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-all glow">
-                发送
-            </button>
-        </div>
+            <div id="chatArea" class="flex-1 overflow-y-auto space-y-4 mb-4 p-4 rounded-xl bg-white/5 backdrop-blur-sm"></div>
+
+            <div class="flex gap-2">
+                <input type="text" id="questionInput" placeholder="输入你的问题..."
+                    class="flex-1 bg-white/10 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <button id="sendBtn" class="bg-blue-600 hover:bg-blue-700 px-6 py-3 rounded-lg transition-all glow">发送</button>
+            </div>
+        </main>
     </div>
 
     <script>
-        const API_BASE = "http://127.0.0.1:8000";
+        const API_BASE = "http://127.0.0.1:8001";
+        const sessionListEl = document.getElementById("sessionList");
         const chatArea = document.getElementById("chatArea");
         const questionInput = document.getElementById("questionInput");
         const sendBtn = document.getElementById("sendBtn");
         const fileUpload = document.getElementById("fileUpload");
+        const newChatBtn = document.getElementById("newChatBtn");
+        const clearHistoryBtn = document.getElementById("clearHistoryBtn");
+
+        let sessions = [];
+        let currentSid = localStorage.getItem("currentSid") || "";
+        const WELCOME = "你好！我是企业知识库AI助手，你可以上传公司文档，然后直接向我提问哦~";
+
+        function addMessage(type, text) {
+            const div = document.createElement("div");
+            div.className = type === "user"
+                ? "chat-bubble-user p-4 rounded-lg max-w-3xl ml-auto"
+                : "chat-bubble-ai p-4 rounded-lg max-w-3xl";
+            div.textContent = text;
+            chatArea.appendChild(div);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        // 拉取会话列表，必要时新建第一个会话
+        async function loadSessionList() {
+            const res = await fetch(`${API_BASE}/session/list`);
+            const data = await res.json();
+            sessions = data.sessions || [];
+
+            if (sessions.length === 0) {
+                await createSession();
+                return;
+            }
+            // 校验当前 sid 是否还存在
+            if (!sessions.find(s => s.session_id === currentSid)) {
+                currentSid = sessions[0].session_id;
+                localStorage.setItem("currentSid", currentSid);
+            }
+            renderSessionList();
+            await loadCurrentHistory();
+        }
+
+        function renderSessionList() {
+            sessionListEl.innerHTML = "";
+            for (const s of sessions) {
+                const item = document.createElement("div");
+                item.className = "session-item flex items-center justify-between p-3 rounded-lg cursor-pointer hover:bg-white/10"
+                    + (s.session_id === currentSid ? " active" : "");
+                const title = document.createElement("span");
+                title.textContent = s.title;
+                title.className = "truncate flex-1";
+                title.onclick = () => switchSession(s.session_id);
+
+                const del = document.createElement("button");
+                del.textContent = "✕";
+                del.className = "ml-2 text-rose-400 hover:text-rose-300";
+                del.onclick = (e) => { e.stopPropagation(); deleteSession(s.session_id); };
+
+                item.appendChild(title);
+                item.appendChild(del);
+                sessionListEl.appendChild(item);
+            }
+        }
+
+        async function createSession() {
+            const res = await fetch(`${API_BASE}/session/new`, { method: "POST" });
+            const data = await res.json();
+            currentSid = data.session_id;
+            localStorage.setItem("currentSid", currentSid);
+            await loadSessionList();
+        }
+
+        async function switchSession(sid) {
+            currentSid = sid;
+            localStorage.setItem("currentSid", sid);
+            renderSessionList();
+            await loadCurrentHistory();
+        }
+
+        async function deleteSession(sid) {
+            await fetch(`${API_BASE}/session/delete`, {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({ session_id: sid })
+            });
+            if (sid === currentSid) currentSid = "";
+            await loadSessionList();
+        }
+
+        async function loadCurrentHistory() {
+            chatArea.innerHTML = "";
+            addMessage("ai", WELCOME);
+            const res = await fetch(`${API_BASE}/session/history?session_id=${currentSid}`);
+            const data = await res.json();
+            for (const msg of (data.history || [])) {
+                addMessage(msg.role, msg.content);
+            }
+        }
 
         // 上传文件
         fileUpload.addEventListener("change", async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            
             const formData = new FormData();
             formData.append("file", file);
-            
             addMessage("ai", `正在上传文档：${file.name}...`);
-            
             try {
-                const res = await fetch(`${API_BASE}/upload`, {
-                    method: "POST",
-                    body: formData
-                });
+                const res = await fetch(`${API_BASE}/upload`, { method: "POST", body: formData });
                 const data = await res.json();
-                addMessage("ai", `✅ 文档上传成功！已索引 ${data.chunks || "若干"} 个文本片段`);
+                if (data.error) addMessage("ai", `❌ ${data.error}`);
+                else addMessage("ai", `✅ 文档上传成功！已索引 ${data.chunk_count || "若干"} 个文本片段`);
             } catch (err) {
                 addMessage("ai", `❌ 上传失败：${err.message}`);
             }
+            fileUpload.value = "";
         });
 
         // 发送问题
         async function sendQuestion() {
             const q = questionInput.value.trim();
             if (!q) return;
-            
+            if (!currentSid) await createSession();
             addMessage("user", q);
             questionInput.value = "";
             sendBtn.disabled = true;
             sendBtn.textContent = "思考中...";
-            
             try {
                 const res = await fetch(`${API_BASE}/chat`, {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({query: q})
+                    body: JSON.stringify({ query: q, session_id: currentSid })
                 });
                 const data = await res.json();
-                addMessage("ai", data.answer);
+                const answer = data.answer || data.error || "❌ 未返回内容";
+                addMessage("ai", answer);
+                // 刷新侧边栏标题与历史
+                await loadSessionList();
             } catch (err) {
                 addMessage("ai", `❌ 请求失败：${err.message}，请检查后端是否启动`);
             } finally {
@@ -112,20 +191,16 @@
         }
 
         sendBtn.addEventListener("click", sendQuestion);
-        questionInput.addEventListener("keypress", (e) => {
-            if (e.key === "Enter") sendQuestion();
+        questionInput.addEventListener("keypress", (e) => { if (e.key === "Enter") sendQuestion(); });
+
+        newChatBtn.addEventListener("click", createSession);
+
+        clearHistoryBtn.addEventListener("click", async () => {
+            await fetch(`${API_BASE}/clear_history?session_id=${currentSid}`, { method: "POST" });
+            await loadCurrentHistory();
         });
 
-        // 添加消息到聊天框
-        function addMessage(type, text) {
-            const div = document.createElement("div");
-            div.className = type === "user" 
-                ? "chat-bubble-user p-4 rounded-lg max-w-3xl ml-auto" 
-                : "chat-bubble-ai p-4 rounded-lg max-w-3xl";
-            div.textContent = text;
-            chatArea.appendChild(div);
-            chatArea.scrollTop = chatArea.scrollHeight;
-        }
+        loadSessionList();
     </script>
 </body>
 </html>
